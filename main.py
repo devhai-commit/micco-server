@@ -1,17 +1,31 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base
-from routers import auth, documents, dashboard, chat
+from routers import auth, documents, dashboard, chat, admin
+from routers import ingest
+from services.neo4j_service import neo4j_service
 
 # ─── Create tables ───────────────────────────────────────────
 Base.metadata.create_all(bind=engine)
+
+
+# ─── Lifespan ─────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    neo4j_service.connect()
+    yield
+    neo4j_service.close()
+
 
 # ─── App ─────────────────────────────────────────────────────
 app = FastAPI(
     title="Micco AI API",
     description="Enterprise Document Management API with AI Assistant",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ─── CORS ────────────────────────────────────────────────────
@@ -33,6 +47,8 @@ app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(dashboard.router)
 app.include_router(chat.router)
+app.include_router(admin.router)
+app.include_router(ingest.router)
 
 
 @app.get("/api/health")
