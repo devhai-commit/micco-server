@@ -1,8 +1,15 @@
 import logging
 import os
 from neo4j import GraphDatabase
+from kg.ontology import RelType
 
 logger = logging.getLogger(__name__)
+
+# Allowlist of valid Neo4j labels (prevents Cypher label injection)
+_ALLOWED_LABELS = {
+    "VatTu", "HopDong", "QuyDinh", "SuCo", "KeHoachMuaSam",
+    "PhieuNhapKho", "ChungChi",
+}
 
 CATEGORY_LABEL_MAP: dict[str, str] = {
     "VatTu":       "VatTu",
@@ -53,6 +60,8 @@ class Neo4jService:
         if not self.available:
             return
         label = doc["label"]
+        if label not in _ALLOWED_LABELS:
+            raise ValueError(f"Unexpected Neo4j label: {label!r}")
         cypher = (
             f"MERGE (n:{label} {{document_id: $document_id}}) "
             "SET n.ten = $ten, n.owner = $owner, n.created_at = $created_at"
@@ -69,10 +78,11 @@ class Neo4jService:
     def create_chunk_node(self, document_id: int, chunk_idx: int) -> None:
         if not self.available:
             return
-        cypher = """
-            MERGE (doc:Document {document_id: $document_id})
-            MERGE (chunk:DocumentChunk {document_id: $document_id, chunk_index: $chunk_index})
-            MERGE (doc)-[:HAS_CHUNK]->(chunk)
+        rel = RelType.HAS_CHUNK.value
+        cypher = f"""
+            MERGE (doc:Document {{document_id: $document_id}})
+            MERGE (chunk:DocumentChunk {{document_id: $document_id, chunk_index: $chunk_index}})
+            MERGE (doc)-[:{rel}]->(chunk)
         """
         with self._driver.session() as session:
             session.run(cypher, document_id=document_id, chunk_index=chunk_idx)

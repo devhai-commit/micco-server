@@ -1,4 +1,6 @@
 import logging
+import os
+from pathlib import Path
 from sqlalchemy import text
 
 from database import SessionLocal
@@ -11,6 +13,15 @@ from services.embedding_service import embed
 logger = logging.getLogger(__name__)
 
 _OCR_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+_UPLOADS_ROOT = Path(os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads"))).resolve()
+
+
+def _safe_file_path(file_path: str) -> Path:
+    """Resolve path and verify it stays within the uploads root (prevents path traversal)."""
+    resolved = Path(file_path).resolve()
+    if not str(resolved).startswith(str(_UPLOADS_ROOT)):
+        raise ValueError(f"Path traversal detected: {file_path!r}")
+    return resolved
 
 
 def run(document_id: int) -> None:
@@ -28,6 +39,7 @@ def run(document_id: int) -> None:
     Status transitions: pending → processing → completed | failed
     """
     db = SessionLocal()
+    doc = None  # initialize before try so except block can safely check it
     try:
         doc = db.query(Document).filter(Document.id == document_id).first()
         if doc is None:
@@ -50,10 +62,11 @@ def run(document_id: int) -> None:
         })
 
         # ── Unstructured path: OCR → chunk → embed ──────────────────────────
-        file_path = doc.file_path or ""
-        ext = "." + file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+        raw_path = doc.file_path or ""
+        ext = "." + raw_path.rsplit(".", 1)[-1].lower() if "." in raw_path else ""
 
         if ext in _OCR_EXTENSIONS:
+            file_path = str(_safe_file_path(raw_path))
             pages = extract_text(file_path)
             if pages:
                 chunks = chunk_text(pages)
@@ -95,9 +108,10 @@ def run(document_id: int) -> None:
     except Exception as exc:
         logger.error("Ingest failed for document_id=%d: %s", document_id, exc, exc_info=True)
         try:
-            doc.ingest_status = "failed"
-            doc.ingest_error = str(exc)
-            db.commit()
+            if doc is not None:
+                doc.ingest_status = "failed"
+                doc.ingest_error = str(exc)
+                db.commit()
         except Exception:
             db.rollback()
     finally:

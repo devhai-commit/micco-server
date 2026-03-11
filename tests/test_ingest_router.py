@@ -105,6 +105,7 @@ def test_batch_requires_admin():
 
 
 def test_batch_route_not_shadowed_by_document_id_route():
+    """Verify /api/ingest/batch is matched as the literal route, not as document_id='batch'."""
     db = MagicMock()
     db.query.return_value.filter.return_value.all.return_value = []
 
@@ -114,8 +115,16 @@ def test_batch_route_not_shadowed_by_document_id_route():
     def override_user():
         return _mock_user(role="Admin")
 
-    app = _make_app_with_overrides(override_db, override_user)
-    with TestClient(app) as c:
-        resp = c.post("/api/ingest/batch")
-        assert resp.status_code != 422
-        assert resp.status_code == 200
+    # or_() is called with MagicMock columns from the stubbed Document model,
+    # which confuses SQLAlchemy's expression coercion. Patch or_ in the ingest
+    # router module to avoid coercion so the mock filter chain proceeds normally.
+    # Must patch BEFORE the module is re-imported in _make_app_with_overrides.
+    import sys
+    sys.modules.pop("routers.ingest", None)
+    with patch.dict("sys.modules"):  # isolate sys.modules changes
+        with patch("sqlalchemy.or_", return_value=MagicMock()):
+            app = _make_app_with_overrides(override_db, override_user)
+            with TestClient(app) as c:
+                resp = c.post("/api/ingest/batch")
+                assert resp.status_code != 422
+                assert resp.status_code == 200

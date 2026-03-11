@@ -26,6 +26,7 @@ def test_run_sets_processing_then_completed():
     doc = _make_doc()
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
+         patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/test.pdf"), \
          patch("services.ingest_pipeline.extract_text", return_value=["Page 1"]), \
          patch("services.ingest_pipeline.chunk_text", return_value=[{"chunk_index": 0, "content": "text", "char_start": 0}]), \
          patch("services.ingest_pipeline.embed", return_value=[[0.1] * 1024]), \
@@ -62,6 +63,7 @@ def test_run_ocr_path_for_pdf():
     doc = _make_doc(category="Tài liệu", file_path="/uploads/material.pdf")
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
+         patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/material.pdf"), \
          patch("services.ingest_pipeline.extract_text", return_value=["page text"]) as mock_ocr, \
          patch("services.ingest_pipeline.chunk_text", return_value=[{"chunk_index": 0, "content": "c", "char_start": 0}]), \
          patch("services.ingest_pipeline.embed", return_value=[[0.0] * 1024]), \

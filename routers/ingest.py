@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
@@ -22,7 +23,7 @@ def batch_ingest(
 
     docs = (
         db.query(Document)
-        .filter(Document.ingest_status != "completed")
+        .filter(or_(Document.ingest_status != "completed", Document.ingest_status.is_(None)))
         .all()
     )
     for doc in docs:

@@ -34,6 +34,11 @@ def embed(texts: list[str]) -> list[list[float]]:
     except RuntimeError as exc:
         if "out of memory" in str(exc).lower():
             logger.warning("OOM on embedding batch — retrying with batch_size=1")
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except ImportError:
+                pass
             vectors = model.encode(texts, batch_size=1, normalize_embeddings=True)
         else:
             raise
