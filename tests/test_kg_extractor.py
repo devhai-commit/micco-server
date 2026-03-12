@@ -40,7 +40,7 @@ def test_extract_kg_returns_entities_and_relationships():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response(payload)
 
-    with patch("services.kg_extractor.OpenAI", return_value=mock_client):
+    with patch("openai.OpenAI", return_value=mock_client):
         from services.kg_extractor import extract_kg
         result = extract_kg(["chunk text"], _make_doc())
 
@@ -60,7 +60,7 @@ def test_extract_kg_filters_invalid_labels():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response(payload)
 
-    with patch("services.kg_extractor.OpenAI", return_value=mock_client):
+    with patch("openai.OpenAI", return_value=mock_client):
         from services.kg_extractor import extract_kg
         result = extract_kg(["text"], _make_doc())
 
@@ -85,7 +85,7 @@ def test_extract_kg_filters_invalid_relation_types():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response(payload)
 
-    with patch("services.kg_extractor.OpenAI", return_value=mock_client):
+    with patch("openai.OpenAI", return_value=mock_client):
         from services.kg_extractor import extract_kg
         result = extract_kg(["text"], _make_doc())
 
@@ -93,7 +93,7 @@ def test_extract_kg_filters_invalid_relation_types():
 
 
 def test_extract_kg_returns_empty_dict_on_openai_exception():
-    with patch("services.kg_extractor.OpenAI", side_effect=Exception("API error")):
+    with patch("openai.OpenAI", side_effect=Exception("API error")):
         from services.kg_extractor import extract_kg
         result = extract_kg(["text"], _make_doc())
     assert result == {}
@@ -103,7 +103,7 @@ def test_extract_kg_returns_empty_dict_on_json_parse_error():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response("not json {{")
 
-    with patch("services.kg_extractor.OpenAI", return_value=mock_client):
+    with patch("openai.OpenAI", return_value=mock_client):
         from services.kg_extractor import extract_kg
         result = extract_kg(["text"], _make_doc())
 
@@ -123,7 +123,7 @@ def test_extract_kg_uses_only_first_5_chunks():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response(payload)
 
-    with patch("services.kg_extractor.OpenAI", return_value=mock_client):
+    with patch("openai.OpenAI", return_value=mock_client):
         from services.kg_extractor import extract_kg
         extract_kg(chunks, _make_doc())
 
@@ -132,3 +132,16 @@ def test_extract_kg_uses_only_first_5_chunks():
     # chunks 5-9 must NOT appear in the prompt
     assert "chunk 5" not in user_content
     assert "chunk 4" in user_content
+
+
+def test_extract_kg_returns_empty_dict_when_llm_returns_empty_lists():
+    """When GPT-4o returns no valid entities or relationships, return {}."""
+    payload = json.dumps({"entities": [], "relationships": []})
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _make_openai_response(payload)
+
+    with patch("openai.OpenAI", return_value=mock_client):
+        from services.kg_extractor import extract_kg
+        result = extract_kg(["text"], _make_doc())
+
+    assert result == {}

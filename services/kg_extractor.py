@@ -1,6 +1,5 @@
 import json
 import logging
-from openai import OpenAI
 from kg.ontology import NodeLabel, RelType
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,7 @@ def extract_kg(chunks: list[str], doc) -> dict:
     if not chunks:
         return {}
     try:
+        from openai import OpenAI
         client = OpenAI()  # lazy: raises here if OPENAI_API_KEY missing; caught below
         text = "\n\n".join(chunks[:5])
         user_prompt = (
