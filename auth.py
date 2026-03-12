@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt as _bcrypt
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -12,16 +13,19 @@ from database import get_db
 from models import User
 
 # ─── Password Hashing ───────────────────────────────────────
+# Uses bcrypt directly (passlib 1.7.4 is incompatible with bcrypt ≥ 4.x).
+# Passwords are truncated to 72 bytes before hashing — bcrypt's hard limit.
+# Hashes produced are identical $2b$ format; existing stored hashes are unaffected.
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_BCRYPT_MAX = 72
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return _bcrypt.hashpw(password.encode()[:_BCRYPT_MAX], _bcrypt.gensalt()).decode()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return _bcrypt.checkpw(plain_password.encode()[:_BCRYPT_MAX], hashed_password.encode())
 
 
 # ─── JWT Token ───────────────────────────────────────────────
