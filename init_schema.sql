@@ -64,6 +64,8 @@ CREATE TABLE documents (
     tags            JSONB         NOT NULL DEFAULT '[]'::jsonb,
     status          VARCHAR(20)   NOT NULL DEFAULT 'Active',
     file_path       VARCHAR(500),
+    ingest_status   VARCHAR(20)   DEFAULT 'pending',
+    ingest_error    TEXT,
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 
