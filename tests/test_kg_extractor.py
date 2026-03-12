@@ -1,7 +1,25 @@
 # backend/tests/test_kg_extractor.py
 import json
+import sys
+import importlib
 import pytest
 from unittest.mock import MagicMock, patch
+
+
+@pytest.fixture(autouse=True)
+def _reload_kg_extractor():
+    """Reload kg_extractor module before each test to clear stubs."""
+    # Remove module from cache if it's a stub (types.ModuleType without __file__)
+    if "services.kg_extractor" in sys.modules:
+        mod = sys.modules["services.kg_extractor"]
+        if not hasattr(mod, "__file__"):
+            del sys.modules["services.kg_extractor"]
+    if "services" in sys.modules:
+        # Also reload services to clear cached reference
+        try:
+            importlib.reload(sys.modules["services"])
+        except (ImportError, AttributeError):
+            pass
 
 
 def _make_doc(name="test.pdf", category="HopDong"):

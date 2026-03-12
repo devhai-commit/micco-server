@@ -10,7 +10,7 @@ def _stub(name, obj=None):
     sys.modules.setdefault(name, obj or types.ModuleType(name))
 
 _stub("database"); _stub("auth"); _stub("config")
-_stub("services"); _stub("services.ingest_pipeline")
+_stub("services"); _stub("services.ingest_pipeline"); _stub("services.kg_extractor")
 
 sys.modules["config"].UPLOAD_DIR = "/tmp"
 sys.modules["config"].MAX_FILE_SIZE = 100 * 1024 * 1024

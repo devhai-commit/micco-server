@@ -9,6 +9,7 @@ from services.neo4j_service import neo4j_service, category_to_label
 from services.ocr_pipeline import extract_text
 from services.chunker_service import chunk_text
 from services.embedding_service import embed
+from services import kg_extractor
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,17 @@ def run(document_id: int) -> None:
                             chunk_idx=chunk["chunk_index"],
                         )
                     db.commit()
+
+                    # ── EKG extraction ─────────────────────────────────────
+                    if neo4j_service.available:
+                        chunk_texts = [c["content"] for c in chunks]
+                        kg = kg_extractor.extract_kg(chunk_texts, doc)
+                        if kg:
+                            neo4j_service.create_entity_graph(
+                                doc.id,
+                                kg.get("entities", []),
+                                kg.get("relationships", []),
+                            )
 
         doc.ingest_status = "completed"
         db.commit()
