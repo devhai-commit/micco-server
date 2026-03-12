@@ -17,7 +17,11 @@ _BASE = (
 _INTENT_HINTS = {
     "structural": (
         "PRIORITY: Start with query_knowledge_graph for relationship and traceability questions. "
-        "Fall back to search_document_chunks only if the graph query returns no useful results."
+        "Fall back to search_document_chunks only if the graph query returns no useful results. "
+        "When calling query_knowledge_graph, structure your RETURN clause as: "
+        "RETURN n.name AS source, labels(n)[0] AS source_type, type(r) AS relation, "
+        "m.name AS target, labels(m)[0] AS target_type "
+        "This enables the UI to visualise the graph."
     ),
     "semantic": (
         "PRIORITY: Start with search_document_chunks for document content questions. "
@@ -25,7 +29,11 @@ _INTENT_HINTS = {
     ),
     "hybrid": (
         "PRIORITY: Use both query_knowledge_graph and search_document_chunks, "
-        "then synthesize the results into a comprehensive answer."
+        "then synthesize the results into a comprehensive answer. "
+        "When calling query_knowledge_graph, structure your RETURN clause as: "
+        "RETURN n.name AS source, labels(n)[0] AS source_type, type(r) AS relation, "
+        "m.name AS target, labels(m)[0] AS target_type "
+        "This enables the UI to visualise the graph."
     ),
 }
 

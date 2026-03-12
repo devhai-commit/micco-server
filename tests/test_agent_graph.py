@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from services.agent import AgentResult
 
 
 # ── _parse_tool_output ───────────────────────────────────────
@@ -98,7 +99,7 @@ def test_run_agent_returns_final_ai_message_content():
     }
     with patch("services.agent.graph.build_graph", return_value=mock_app):
         result = run_agent("Nhà cung cấp nào?", MagicMock())
-    assert result == "The supplier is NhaCungCapA."
+    assert result.answer == "The supplier is NhaCungCapA."
 
 
 def test_run_agent_recursion_returns_exact_fallback():
@@ -112,8 +113,8 @@ def test_run_agent_recursion_returns_exact_fallback():
     with patch("services.agent.graph.build_graph", return_value=mock_app):
         result = run_agent("query", MagicMock())
 
-    assert result == _FALLBACK_RECURSION
-    assert "unable to complete" in result.lower()
+    assert result.answer == _FALLBACK_RECURSION
+    assert "unable to complete" in result.answer.lower()
 
 
 def test_run_agent_api_error_returns_service_unavailable():
@@ -125,8 +126,8 @@ def test_run_agent_api_error_returns_service_unavailable():
     with patch("services.agent.graph.build_graph", return_value=mock_app):
         result = run_agent("query", MagicMock())
 
-    assert result == _FALLBACK_API_ERROR
-    assert "unavailable" in result.lower()
+    assert result.answer == _FALLBACK_API_ERROR
+    assert "unavailable" in result.answer.lower()
 
 
 def test_run_agent_never_raises():
@@ -138,7 +139,7 @@ def test_run_agent_never_raises():
     with patch("services.agent.graph.build_graph", return_value=mock_app):
         try:
             result = run_agent("anything", MagicMock())
-            assert isinstance(result, str)
+            assert isinstance(result, AgentResult)
         except Exception:
             pytest.fail("run_agent raised an exception — it must never raise")
 
@@ -157,4 +158,4 @@ def test_run_agent_returns_fallback_when_no_ai_message_in_result():
     with patch("services.agent.graph.build_graph", return_value=mock_app):
         result = run_agent("query", MagicMock())
 
-    assert result == _FALLBACK_RECURSION
+    assert result.answer == _FALLBACK_RECURSION
