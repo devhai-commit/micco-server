@@ -10,6 +10,8 @@ from models import User, Document
 from schemas import DocumentResponse
 from auth import get_current_user
 from config import UPLOAD_DIR, MAX_FILE_SIZE
+from fastapi import BackgroundTasks
+from services import ingest_pipeline
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
@@ -101,6 +103,7 @@ def list_documents(
 
 @router.post("/upload", response_model=list[DocumentResponse])
 async def upload_documents(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     tags: Optional[str] = Form(None),
     category: Optional[str] = Form(None),
@@ -156,6 +159,9 @@ async def upload_documents(
 
         # Eagerly load relationships for response
         db.refresh(doc, attribute_names=["owner", "department"])
+
+        # Enqueue ingest pipeline as background task
+        background_tasks.add_task(ingest_pipeline.run, doc.id)
 
         uploaded.append(build_document_response(doc))
 
