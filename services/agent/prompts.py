@@ -20,7 +20,7 @@ _INTENT_HINTS = {
         "Fall back to search_document_chunks only if the graph query returns no useful results. "
         "When calling query_knowledge_graph, structure your RETURN clause as: "
         "RETURN n.name AS source, labels(n)[0] AS source_type, type(r) AS relation, "
-        "m.name AS target, labels(m)[0] AS target_type "
+        "m.name AS target, labels(m)[0] AS target_type. "
         "This enables the UI to visualise the graph."
     ),
     "semantic": (
@@ -32,7 +32,7 @@ _INTENT_HINTS = {
         "then synthesize the results into a comprehensive answer. "
         "When calling query_knowledge_graph, structure your RETURN clause as: "
         "RETURN n.name AS source, labels(n)[0] AS source_type, type(r) AS relation, "
-        "m.name AS target, labels(m)[0] AS target_type "
+        "m.name AS target, labels(m)[0] AS target_type. "
         "This enables the UI to visualise the graph."
     ),
 }
