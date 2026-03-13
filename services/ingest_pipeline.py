@@ -62,56 +62,82 @@ def run(document_id: int) -> None:
             "created_at": doc.created_at.isoformat() if doc.created_at else "",
         })
 
-        # ── Unstructured path: OCR → chunk → embed ──────────────────────────
+        # ── Unstructured path: text extraction → chunk → embed ─────────────
         raw_path = doc.file_path or ""
         ext = "." + raw_path.rsplit(".", 1)[-1].lower() if "." in raw_path else ""
 
+        # Determine which chunks to process
+        chunks_to_process = None
+        file_path = None
+
         if ext in _OCR_EXTENSIONS:
+            # PDF/Image: use OCR
             file_path = str(_safe_file_path(raw_path))
-            pages = extract_text(file_path)
+            pages, md_path = extract_text(file_path)
+            logger.info("OCR completed. Markdown saved to: %s", md_path)
             if pages:
-                chunks = chunk_text(pages)
-                if chunks:
-                    contents = [c["content"] for c in chunks]
-                    vectors = embed(contents)
+                chunks_to_process = chunk_text(pages)
+        elif ext in {".md", ".txt"}:
+            # Text files: read directly
+            file_path = str(_safe_file_path(raw_path))
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    text_content = f.read()
+                if text_content.strip():
+                    chunks_to_process = chunk_text([text_content])
+                    logger.info("Text file read directly: %s", file_path)
+            except Exception as exc:
+                logger.warning("Failed to read text file %s: %s", file_path, exc)
 
-                    for chunk, vector in zip(chunks, vectors):
-                        db.execute(
-                            text("""
-                                INSERT INTO document_chunks
-                                    (document_id, chunk_index, content, embedding, token_count)
-                                VALUES
-                                    (:document_id, :chunk_index, :content,
-                                     CAST(:embedding AS vector), :token_count)
-                                ON CONFLICT (document_id, chunk_index)
-                                DO UPDATE SET
-                                    content   = EXCLUDED.content,
-                                    embedding = EXCLUDED.embedding
-                            """),
-                            {
-                                "document_id": document_id,
-                                "chunk_index": chunk["chunk_index"],
-                                "content": chunk["content"],
-                                "embedding": str(vector),
-                                "token_count": len(chunk["content"].split()),
-                            },
-                        )
-                        neo4j_service.create_chunk_node(
-                            document_id=document_id,
-                            chunk_idx=chunk["chunk_index"],
-                        )
-                    db.commit()
+        # Process chunks if we have them
+        if chunks_to_process:
+            contents = [c["content"] for c in chunks_to_process]
+            vectors = embed(contents)
 
-                    # ── EKG extraction ─────────────────────────────────────
-                    if neo4j_service.available:
-                        chunk_texts = [c["content"] for c in chunks]
-                        kg = kg_extractor.extract_kg(chunk_texts, doc)
-                        if kg:
-                            neo4j_service.create_entity_graph(
-                                doc.id,
-                                kg.get("entities", []),
-                                kg.get("relationships", []),
-                            )
+            for chunk, vector in zip(chunks_to_process, vectors):
+                db.execute(
+                    text("""
+                        INSERT INTO document_chunks
+                            (document_id, chunk_index, content, embedding, token_count)
+                        VALUES
+                            (:document_id, :chunk_index, :content,
+                             CAST(:embedding AS vector), :token_count)
+                        ON CONFLICT (document_id, chunk_index)
+                        DO UPDATE SET
+                            content   = EXCLUDED.content,
+                            embedding = EXCLUDED.embedding
+                    """),
+                    {
+                        "document_id": document_id,
+                        "chunk_index": chunk["chunk_index"],
+                        "content": chunk["content"],
+                        "embedding": str(vector),
+                        "token_count": len(chunk["content"].split()),
+                    },
+                )
+                neo4j_service.create_chunk_node(
+                    document_id=document_id,
+                    chunk_idx=chunk["chunk_index"],
+                )
+            db.commit()
+
+            # ── EKG extraction ─────────────────────────────────────
+            logger.info("EKG extraction: neo4j_service.available=%s", neo4j_service.available)
+            if neo4j_service.available:
+                chunk_texts = [c["content"] for c in chunks_to_process]
+                logger.info("EKG extraction: extracting from %d chunks", len(chunk_texts))
+                kg = kg_extractor.extract_kg(chunk_texts, doc)
+                logger.info("EKG extraction: result=%s", kg)
+                if kg:
+                    neo4j_service.create_entity_graph(
+                        doc.id,
+                        kg.get("entities", []),
+                        kg.get("relationships", []),
+                    )
+                else:
+                    logger.warning("EKG extraction returned empty for doc_id=%d", doc.id)
+            else:
+                logger.warning("Neo4j unavailable, skipping EKG extraction for doc_id=%d", document_id)
 
         doc.ingest_status = "completed"
         db.commit()

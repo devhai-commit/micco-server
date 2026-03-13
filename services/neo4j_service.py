@@ -11,7 +11,7 @@ _ALLOWED_LABELS = {
     if label not in (NodeLabel.DOCUMENT, NodeLabel.DOCUMENT_CHUNK)
 }
 
-_DOMAIN_RELS = {rel.value for rel in RelType if rel != RelType.HAS_CHUNK}
+_DOMAIN_RELS = {rel.value for rel in RelType}
 
 CATEGORY_LABEL_MAP: dict[str, str] = {
     "VatTu":       "VatTu",

@@ -22,7 +22,7 @@ def test_extract_text_returns_list_of_strings(tmp_path):
          patch("services.ocr_pipeline._run_inference", return_value="Page text"):
         from services import ocr_pipeline
         ocr_pipeline._model = None
-        ocr_pipeline._tokenizer = None
+        ocr_pipeline._processor = None
         result = ocr_pipeline.extract_text(str(fake_pdf))
         assert isinstance(result, list)
         assert len(result) == 2
@@ -41,7 +41,7 @@ def test_extract_text_single_image(tmp_path):
          patch("services.ocr_pipeline._run_inference", return_value="Image text"):
         from services import ocr_pipeline
         ocr_pipeline._model = None
-        ocr_pipeline._tokenizer = None
+        ocr_pipeline._processor = None
         result = ocr_pipeline.extract_text(str(fake_img))
         assert len(result) == 1
         assert result[0] == "Image text"
@@ -66,7 +66,7 @@ def test_extract_text_page_failure_skips_page(tmp_path):
          patch("services.ocr_pipeline._run_inference", side_effect=side_effect):
         from services import ocr_pipeline
         ocr_pipeline._model = None
-        ocr_pipeline._tokenizer = None
+        ocr_pipeline._processor = None
         result = ocr_pipeline.extract_text(str(fake_pdf))
         assert len(result) == 1
         assert result[0] == "Page 2 text"
