@@ -33,9 +33,10 @@ def run(document_id: int) -> None:
 
     Stages:
       1. Load document record from PostgreSQL.
-      2. MERGE typed Neo4j node (structured path — all document types).
-      3. If PDF/PNG/JPG: OCR → chunk → embed → INSERT document_chunks (unstructured path).
-      4. Create DocumentChunk Neo4j nodes linked by HAS_CHUNK.
+      2. MERGE typed Neo4j node (Document node).
+      3. If PDF/PNG/JPG: OCR → markdown → chunk → embed → INSERT document_chunks.
+         If .md/.txt: read → chunk → embed → INSERT document_chunks.
+      4. Extract entities/relationships via LLM → insert into Neo4j graph.
 
     Status transitions: pending → processing → completed | failed
     """
@@ -115,9 +116,12 @@ def run(document_id: int) -> None:
                         "token_count": len(chunk["content"].split()),
                     },
                 )
-                neo4j_service.create_chunk_node(
+                # Sync DocumentChunk to Neo4j with embedding
+                neo4j_service.merge_document_chunk(
                     document_id=document_id,
-                    chunk_idx=chunk["chunk_index"],
+                    chunk_index=chunk["chunk_index"],
+                    content=chunk["content"],
+                    embedding=vector,
                 )
             db.commit()
 

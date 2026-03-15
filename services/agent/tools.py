@@ -45,6 +45,33 @@ def make_tools(db: Session) -> list:
             raise ToolException(f"Graph query failed: {exc}") from exc
 
     @tool
+    def search_kg_semantic(query: str, limit: int = 5) -> str:
+        """Semantic search over document chunks using Neo4j vector similarity.
+
+        Uses embeddings stored in Neo4j to find relevant document chunks.
+        Returns chunk content, source document ID, and similarity score.
+        Use this for content-based questions about document text.
+        """
+        try:
+            vector = embed([query])[0]
+            rows = neo4j_service.search_similar_chunks(vector, limit)
+            if not rows:
+                return "No matching chunks found in knowledge graph."
+            lines = []
+            doc_ids = []
+            for i, row in enumerate(rows, 1):
+                doc_ids.append(str(row.get("document_id", "")))
+                lines.append(
+                    f"Chunk {i} (doc_id={row.get('document_id')}, "
+                    f"similarity={row.get('similarity', 0):.3f}):\n{row.get('content', '')}"
+                )
+            doc_id_str = ",".join(dict.fromkeys(doc_ids))
+            return "DOCUMENT_IDS: " + doc_id_str + "\n---\n" + "\n\n".join(lines)
+        except Exception as exc:
+            logger.warning("Neo4j semantic search failed: %s", exc)
+            return ""
+
+    @tool
     def search_document_chunks(query: str, limit: int = 5) -> str:
         """Semantic search over document chunk embeddings.
 
@@ -98,4 +125,4 @@ def make_tools(db: Session) -> list:
         except Exception as exc:
             raise ToolException(f"Document lookup failed: {exc}") from exc
 
-    return [query_knowledge_graph, search_document_chunks, get_document_details]
+    return [query_knowledge_graph, search_kg_semantic, search_document_chunks, get_document_details]

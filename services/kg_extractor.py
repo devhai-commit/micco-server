@@ -50,9 +50,38 @@ _SYSTEM_PROMPT = (
     "For Vietnamese company names, use the full official name."
 )
 
+_ENTITY_ONLY_PROMPT = (
+    "You are an expert entity extractor for Vietnamese business documents.\n"
+    "Extract ONLY entities (NO relationships) from the text below.\n\n"
+    "VALID ENTITY LABELS: " + ", ".join(sorted(_DOMAIN_LABELS)) + "\n\n"
+    "For each entity, provide:\n"
+    "- name: The entity name (full Vietnamese name for companies, specific names for items)\n"
+    "- label: One of the valid labels above\n\n"
+    'Return JSON: {"entities": [{"name": "...", "label": "..."}]}\n'
+    "Only use labels from the valid list. Extract ALL entities mentioned in the text."
+)
+
+_RELATIONSHIP_ONLY_PROMPT = (
+    "You are an expert relationship extractor for Vietnamese business documents.\n"
+    "Given a list of entities and the full document text, extract ONLY relationships between them.\n\n"
+    "VALID ENTITY LABELS: " + ", ".join(sorted(_DOMAIN_LABELS)) + "\n"
+    "VALID RELATIONSHIP TYPES: " + ", ".join(sorted(_DOMAIN_RELS)) + "\n\n"
+    "Rules:\n"
+    "1. Only create relationships explicitly mentioned or clearly implied in the text\n"
+    "2. Use exact entity names from the provided list\n"
+    "3. Only use relationship types from the valid list above\n"
+    "4. Do NOT create relationships that are not supported by the text\n\n"
+    "Return JSON:\n"
+    '{"relationships": [{"source": "...", "source_label": "...", '
+    '"relation": "...", "target": "...", "target_label": "..."}]}\n'
+    "If no relationships are found, return {\"relationships\": []}"
+)
+
 
 def extract_kg(chunks: list[str], doc) -> dict:
-    """Send first 5 chunks to GPT-4o and return extracted EKG data.
+    """Two-phase extraction:
+    1. Extract all entities from all chunks (aggregate)
+    2. Extract relationships based on full context + known entities
 
     Returns {"entities": [...], "relationships": [...]} or {} on any error.
     Never raises — extraction failure must not block ingest.
@@ -63,41 +92,96 @@ def extract_kg(chunks: list[str], doc) -> dict:
     try:
         from openai import OpenAI
         client = OpenAI()  # lazy: raises here if OPENAI_API_KEY missing; caught below
-        logger.info("OpenAI client initialized successfully for doc_id=%s", getattr(doc, "id", "?"))
-        text = "\n\n".join(chunks[:5])
-        user_prompt = (
-            f"Document name: {doc.name}\n"
-            f"Document category: {doc.category}\n\n"
-            f"Text:\n{text}"
-        )
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        data = json.loads(response.choices[0].message.content)
+        logger.info("OpenAI client initialized for doc_id=%s, processing %d chunks",
+                    getattr(doc, "id", "?"), len(chunks))
 
-        entities = [
-            e for e in data.get("entities", [])
-            if isinstance(e, dict)
-            and e.get("name")
-            and e.get("label") in _DOMAIN_LABELS
-        ]
-        relationships = [
-            r for r in data.get("relationships", [])
-            if isinstance(r, dict)
-            and r.get("source")
-            and r.get("source_label") in _DOMAIN_LABELS
-            and r.get("relation") in _DOMAIN_RELS
-            and r.get("target")
-            and r.get("target_label") in _DOMAIN_LABELS
-        ]
-        if not entities and not relationships:
+        # ── Phase 1: Extract entities from all chunks ───────────────
+        all_entities: list[dict] = []
+
+        for i, chunk_text in enumerate(chunks):
+            user_prompt = (
+                f"Document name: {doc.name}\n"
+                f"Document category: {doc.category}\n\n"
+                f"Extract ONLY entities (no relationships) from this text chunk.\n\n"
+                f"Text chunk {i+1}/{len(chunks)}:\n{chunk_text}"
+            )
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": _ENTITY_ONLY_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            data = json.loads(response.choices[0].message.content)
+
+            for e in data.get("entities", []):
+                if isinstance(e, dict) and e.get("name") and e.get("label") in _DOMAIN_LABELS:
+                    if not any(x["name"] == e["name"] and x["label"] == e["label"] for x in all_entities):
+                        all_entities.append(e)
+
+            logger.info("Phase 1 - Chunk %d/%d: extracted %d entities",
+                        i+1, len(chunks), len(data.get("entities", [])))
+
+        if not all_entities:
+            logger.warning("No entities extracted for doc_id=%s", getattr(doc, "id", "?"))
             return {}
-        return {"entities": entities, "relationships": relationships}
+
+        # ── Phase 2: Extract relationships in batches to avoid token limit ─────
+        # Split chunks into groups of 50 for relationship extraction
+        BATCH_SIZE = 50
+        all_chunks = chunks
+        relationships: list[dict] = []
+
+        for batch_idx in range(0, len(all_chunks), BATCH_SIZE):
+            batch_chunks = all_chunks[batch_idx:batch_idx + BATCH_SIZE]
+            batch_text = "\n\n".join(batch_chunks)
+
+            entity_info = "\n".join([f"- {e['name']} ({e['label']})" for e in all_entities])
+
+            rel_prompt = (
+                f"Document name: {doc.name}\n"
+                f"Document category: {doc.category}\n\n"
+                f"KNOWN ENTITIES:\n{entity_info}\n\n"
+                f"TEXT SECTION:\n{batch_text}\n\n"
+                f"Find relationships between known entities in this section only.\n"
+                f"Only create relationships explicitly mentioned in this section."
+            )
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": _RELATIONSHIP_ONLY_PROMPT},
+                        {"role": "user", "content": rel_prompt},
+                    ],
+                )
+                data = json.loads(response.choices[0].message.content)
+
+                for r in data.get("relationships", []):
+                    if (isinstance(r, dict)
+                        and r.get("source")
+                        and r.get("source_label") in _DOMAIN_LABELS
+                        and r.get("relation") in _DOMAIN_RELS
+                        and r.get("target")
+                        and r.get("target_label") in _DOMAIN_LABELS):
+                        if not any(x["source"] == r["source"] and x["relation"] == r["relation"] and x["target"] == r["target"]
+                                   for x in relationships):
+                            relationships.append(r)
+            except Exception as e:
+                logger.warning("Phase 2 batch %d failed: %s", batch_idx // BATCH_SIZE + 1, e)
+                continue
+
+            logger.info("Phase 2 - Batch %d/%d: extracted relationships",
+                        batch_idx // BATCH_SIZE + 1, (len(all_chunks) + BATCH_SIZE - 1) // BATCH_SIZE)
+
+        logger.info("Phase 2: extracted %d relationships from %d entities",
+                    len(relationships), len(all_entities))
+        logger.info("Total for doc_id=%s: %d entities, %d relationships",
+                     getattr(doc, "id", "?"), len(all_entities), len(relationships))
+
+        return {"entities": all_entities, "relationships": relationships}
     except Exception as exc:
         logger.warning(
             "KG extraction failed for doc %s: %s",

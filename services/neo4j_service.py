@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 # Allowlist of valid Neo4j labels (prevents Cypher label injection)
 _ALLOWED_LABELS = {
     label.value for label in NodeLabel
-    if label not in (NodeLabel.DOCUMENT, NodeLabel.DOCUMENT_CHUNK)
 }
 
 _DOMAIN_RELS = {rel.value for rel in RelType}
@@ -77,18 +76,6 @@ class Neo4jService:
                 created_at=doc.get("created_at", ""),
             )
 
-    def create_chunk_node(self, document_id: int, chunk_idx: int) -> None:
-        if not self.available:
-            return
-        rel = RelType.HAS_CHUNK.value
-        cypher = f"""
-            MERGE (doc:Document {{document_id: $document_id}})
-            MERGE (chunk:DocumentChunk {{document_id: $document_id, chunk_index: $chunk_index}})
-            MERGE (doc)-[:{rel}]->(chunk)
-        """
-        with self._driver.session() as session:
-            session.run(cypher, document_id=document_id, chunk_index=chunk_idx)
-
     def create_entity_graph(
         self,
         document_id: int,
@@ -151,6 +138,58 @@ class Neo4jService:
                     doc_id=document_id,
                     name=name,
                 )
+
+    def merge_document_chunk(
+        self,
+        document_id: int,
+        chunk_index: int,
+        content: str,
+        embedding: list[float],
+    ) -> None:
+        """Create a DocumentChunk node with embedding for semantic search."""
+        if not self.available:
+            return
+        cypher = """
+            MERGE (c:DocumentChunk {
+                document_id: $document_id,
+                chunk_index: $chunk_index
+            })
+            SET c.content = $content,
+                c.embedding = $embedding
+            WITH c
+            MATCH (d:Document {document_id: $document_id})
+            MERGE (d)-[:HAS_CHUNK]->(c)
+        """
+        with self._driver.session() as session:
+            session.run(
+                cypher,
+                document_id=document_id,
+                chunk_index=chunk_index,
+                content=content,
+                embedding=embedding,
+            )
+
+    def search_similar_chunks(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+    ) -> list[dict]:
+        """Semantic search over DocumentChunk embeddings in Neo4j."""
+        if not self.available:
+            return []
+        cypher = """
+            MATCH (c:DocumentChunk)
+            WHERE c.embedding IS NOT NULL
+            RETURN c.document_id AS document_id,
+                   c.chunk_index AS chunk_index,
+                   c.content AS content,
+                   apoc.vectors.similarity(c.embedding, $embedding) AS similarity
+            ORDER BY similarity DESC
+            LIMIT $limit
+        """
+        with self._driver.session() as session:
+            result = session.run(cypher, embedding=query_embedding, limit=limit)
+            return [dict(record) for record in result]
 
     def run_cypher(self, query: str, params: dict | None = None) -> list[dict]:
         if not self.available:
