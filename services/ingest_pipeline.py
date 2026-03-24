@@ -13,8 +13,59 @@ from services import kg_extractor
 
 logger = logging.getLogger(__name__)
 
-_OCR_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 _UPLOADS_ROOT = Path(os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads"))).resolve()
+
+# Minimum characters per page to consider a PDF as having extractable text
+_PDF_TEXT_THRESHOLD = 50
+
+
+def _extract_pdf_native(file_path: str) -> list[str] | None:
+    """Try to extract text directly from a text-based PDF (no OCR).
+
+    Returns a list of non-empty page strings if the PDF has sufficient
+    embedded text, or None if the PDF appears to be scanned/image-only.
+    Falls back gracefully if pdfplumber/pypdf is not installed.
+    """
+    pages_text: list[str] = []
+
+    # Try pdfplumber first (best layout-aware extraction)
+    try:
+        import pdfplumber
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                pages_text.append((page.extract_text() or "").strip())
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.warning("pdfplumber failed for %s: %s", file_path, exc)
+
+    # Fallback to pypdf if pdfplumber gave nothing
+    if not any(pages_text):
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            pages_text = [(page.extract_text() or "").strip() for page in reader.pages]
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning("pypdf failed for %s: %s", file_path, exc)
+
+    if not pages_text:
+        return None
+
+    # A PDF is considered text-based when at least half its pages
+    # contain more than the threshold number of characters.
+    pages_with_text = [p for p in pages_text if len(p) >= _PDF_TEXT_THRESHOLD]
+    if len(pages_with_text) >= max(1, len(pages_text) // 2):
+        non_empty = [p for p in pages_text if p]
+        logger.info(
+            "PDF native extraction: %d/%d pages have text (>= %d chars)",
+            len(pages_with_text), len(pages_text), _PDF_TEXT_THRESHOLD,
+        )
+        return non_empty if non_empty else None
+
+    return None
 
 
 def _safe_file_path(file_path: str) -> Path:
@@ -72,8 +123,22 @@ def run(document_id: int) -> None:
         chunks_to_process = None
         file_path = None
 
-        if ext in _OCR_EXTENSIONS:
-            # PDF/Image: use OCR
+        if ext == ".pdf":
+            file_path = str(_safe_file_path(raw_path))
+            # Try native text extraction first (fast, no GPU needed)
+            native_pages = _extract_pdf_native(file_path)
+            if native_pages:
+                logger.info("PDF has embedded text — using native extraction (no OCR)")
+                chunks_to_process = chunk_text(native_pages)
+            else:
+                # Scanned/image PDF — fall back to OCR
+                logger.info("PDF appears scanned — falling back to OCR")
+                pages, md_path = extract_text(file_path)
+                logger.info("OCR completed. Markdown saved to: %s", md_path)
+                if pages:
+                    chunks_to_process = chunk_text(pages)
+        elif ext in _IMAGE_EXTENSIONS:
+            # Images always use OCR
             file_path = str(_safe_file_path(raw_path))
             pages, md_path = extract_text(file_path)
             logger.info("OCR completed. Markdown saved to: %s", md_path)

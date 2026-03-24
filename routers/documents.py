@@ -129,7 +129,7 @@ async def upload_documents(
 ):
     """Upload one or more files with category and department assignment."""
     uploaded = []
-    tag_list = [t.strip() for t in tags.split(",")] if tags else []
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     # Auto-assign department from user if not explicitly provided
     effective_department_id = department_id if department_id is not None else current_user.department_id
