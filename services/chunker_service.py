@@ -4,7 +4,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 def chunk_text(
     pages: list[str],
     chunk_size: int = 512,
-    overlap: int = 50,
+    overlap: int = 128,
 ) -> list[dict]:
     """Split a list of page strings into overlapping text chunks.
 

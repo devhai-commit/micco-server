@@ -84,6 +84,7 @@ def run_agent(query: str, db: Session, department_id: int | None = None) -> Agen
             "intent": "",
             "document_ids": [],
             "department_id": department_id,
+            "retrieval_context": "",
         }
         result = app.invoke(initial_state, config={"recursion_limit": 25})
 
