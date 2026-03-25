@@ -86,11 +86,11 @@ def embed(texts: list[str]) -> list[list[float]]:
       - "bge"    → local BAAI/bge-m3 via SentenceTransformer (default)
       - "openai" → OpenAI API (requires OPENAI_API_KEY, uses OPENAI_EMBED_MODEL)
 
-    Both providers output EMBED_DIMENSIONS-dim vectors (1024) to match
-    the vector(1024) column in document_chunks.
+    Both providers output EMBED_DIMENSIONS-dim vectors (512) to match
+    the vector(512) column in document_chunks.
 
     Returns:
-        List of 1024-dim float vectors.
+        List of 512-dim float vectors.
     """
     if not texts:
         return []

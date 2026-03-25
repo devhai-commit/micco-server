@@ -197,14 +197,6 @@ def run(document_id: int) -> None:
                         "department_id": doc.department_id,
                     },
                 )
-                # Sync DocumentChunk to Neo4j with embedding
-                neo4j_service.merge_document_chunk(
-                    document_id=document_id,
-                    chunk_index=chunk["chunk_index"],
-                    content=chunk["content"],
-                    embedding=vector,
-                    department_id=doc.department_id,
-                )
             db.commit()
 
             # ── EKG extraction ─────────────────────────────────────
@@ -215,11 +207,17 @@ def run(document_id: int) -> None:
                 kg = kg_extractor.extract_kg(chunk_texts, doc)
                 logger.info("EKG extraction: result=%s", kg)
                 if kg:
+                    entities = kg.get("entities", [])
                     neo4j_service.create_entity_graph(
                         doc.id,
-                        kg.get("entities", []),
+                        entities,
                         kg.get("relationships", []),
                     )
+                    # Embed entities for GraphRAG Local Search
+                    if entities:
+                        from services.entity_embedding_service import upsert_entity_embeddings
+                        n = upsert_entity_embeddings(db, entities)
+                        logger.info("Upserted %d entity embeddings for doc_id=%d", n, doc.id)
                 else:
                     logger.warning("EKG extraction returned empty for doc_id=%d", doc.id)
             else:

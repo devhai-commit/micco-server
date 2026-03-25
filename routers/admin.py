@@ -227,3 +227,25 @@ def delete_user(
     db.delete(user)
     db.commit()
     return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# GRAPHRAG COMMUNITIES
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/communities/build")
+def build_communities_endpoint(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(_require_admin),
+):
+    """Trigger Leiden community detection + LLM summary generation.
+
+    This is an expensive batch operation — run it after bulk document ingest,
+    not on every upload.
+    """
+    from services.community_service import build_communities
+
+    result = build_communities(db)
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    return result

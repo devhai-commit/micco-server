@@ -44,8 +44,8 @@ def _make_openai_response(content: str):
 def test_extract_kg_returns_entities_and_relationships():
     payload = json.dumps({
         "entities": [
-            {"name": "HĐ-001", "label": "HopDong"},
-            {"name": "Công ty ABC", "label": "NhaCungCap"},
+            {"name": "HĐ-001", "label": "HopDong", "attributes": {"so_van_ban": "001", "ngay": "15/05/2025"}},
+            {"name": "Công ty ABC", "label": "NhaCungCap", "attributes": {"ma_so_thue": "0100101072"}},
         ],
         "relationships": [
             {
@@ -65,6 +65,8 @@ def test_extract_kg_returns_entities_and_relationships():
     assert len(result["entities"]) == 2
     assert len(result["relationships"]) == 1
     assert result["entities"][0]["name"] == "HĐ-001"
+    assert result["entities"][0]["attributes"]["so_van_ban"] == "001"
+    assert result["entities"][1]["attributes"]["ma_so_thue"] == "0100101072"
 
 
 def test_extract_kg_filters_invalid_labels():
@@ -134,9 +136,9 @@ def test_extract_kg_returns_empty_dict_for_empty_chunks():
     assert result == {}
 
 
-def test_extract_kg_uses_only_first_5_chunks():
-    """Verify only the first 5 chunks are sent to GPT-4o."""
-    chunks = [f"chunk {i}" for i in range(10)]
+def test_extract_kg_batches_chunks():
+    """Verify chunks are batched (batch size = 20)."""
+    chunks = [f"chunk {i}" for i in range(25)]
     payload = json.dumps({"entities": [], "relationships": []})
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response(payload)
@@ -145,11 +147,14 @@ def test_extract_kg_uses_only_first_5_chunks():
         from services.kg_extractor import extract_kg
         extract_kg(chunks, _make_doc())
 
-    call_kwargs = mock_client.chat.completions.create.call_args
-    user_content = call_kwargs[1]["messages"][1]["content"]
-    # chunks 5-9 must NOT appear in the prompt
-    assert "chunk 5" not in user_content
-    assert "chunk 4" in user_content
+    # 25 chunks → 2 entity batches
+    assert mock_client.chat.completions.create.call_count == 2
+    # First batch should contain chunk 0-19
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    user_content = first_call[1]["messages"][1]["content"]
+    assert "chunk 0" in user_content
+    assert "chunk 19" in user_content
+    assert "chunk 20" not in user_content
 
 
 def test_extract_kg_returns_empty_dict_when_llm_returns_empty_lists():
@@ -163,3 +168,49 @@ def test_extract_kg_returns_empty_dict_when_llm_returns_empty_lists():
         result = extract_kg(["text"], _make_doc())
 
     assert result == {}
+
+
+def test_extract_kg_entity_without_attributes_gets_empty_dict():
+    """Entities returned without 'attributes' key get an empty dict."""
+    payload = json.dumps({
+        "entities": [{"name": "Thép CT3", "label": "VatTu"}],
+        "relationships": [],
+    })
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _make_openai_response(payload)
+
+    with patch("openai.OpenAI", return_value=mock_client):
+        from services.kg_extractor import extract_kg
+        result = extract_kg(["text"], _make_doc())
+
+    assert result["entities"][0]["attributes"] == {}
+
+
+def test_extract_kg_merges_attributes_across_batches():
+    """When the same entity appears in multiple batches, attributes are merged."""
+    batch1 = json.dumps({
+        "entities": [{"name": "Cty A", "label": "NhaCungCap", "attributes": {"dia_chi": "Hà Nội"}}],
+    })
+    batch2 = json.dumps({
+        "entities": [{"name": "Cty A", "label": "NhaCungCap", "attributes": {"ma_so_thue": "012345"}}],
+    })
+    rel_payload = json.dumps({"relationships": []})
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = [
+        _make_openai_response(batch1),
+        _make_openai_response(batch2),
+        _make_openai_response(rel_payload),
+    ]
+
+    # Use 25 chunks to trigger 2 entity batches (batch size = 20)
+    chunks = [f"chunk {i}" for i in range(25)]
+
+    with patch("openai.OpenAI", return_value=mock_client):
+        from services.kg_extractor import extract_kg
+        result = extract_kg(chunks, _make_doc())
+
+    assert len(result["entities"]) == 1
+    attrs = result["entities"][0]["attributes"]
+    assert attrs["dia_chi"] == "Hà Nội"
+    assert attrs["ma_so_thue"] == "012345"

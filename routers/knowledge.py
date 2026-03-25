@@ -90,13 +90,6 @@ def ingest_knowledge(entry_id: int) -> None:
                     "department_id": entry.department_id,
                 },
             )
-            neo4j_service.merge_document_chunk(
-                document_id=entry.id,
-                chunk_index=chunk["chunk_index"],
-                content=chunk["content"],
-                embedding=vector,
-                department_id=entry.department_id,
-            )
         db.commit()
 
         # ── EKG extraction ──────────────────────────────────────

@@ -68,6 +68,23 @@ class DocumentResponse(BaseModel):
         from_attributes = True
 
 
+# ─── Document Version Schemas ────────────────────────────────
+
+class DocumentVersionResponse(BaseModel):
+    id: int
+    document_id: int
+    version_number: int
+    version_label: str
+    size: Optional[str] = None
+    change_note: Optional[str] = None
+    created_by_name: str
+    is_current: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ─── Document Chunk Schemas ──────────────────────────────────
 
 class DocumentChunkResponse(BaseModel):

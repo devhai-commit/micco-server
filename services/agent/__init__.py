@@ -85,7 +85,7 @@ def run_agent(query: str, db: Session, department_id: int | None = None) -> Agen
             "document_ids": [],
             "department_id": department_id,
         }
-        result = app.invoke(initial_state, config={"recursion_limit": 6})
+        result = app.invoke(initial_state, config={"recursion_limit": 25})
 
         graph_data = _extract_graph_data(result)
 

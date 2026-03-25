@@ -22,9 +22,8 @@ class NodeLabel(str, Enum):
     RUI_RO          = "RuiRo"
     # Knowledge base (1)
     TRI_THUC        = "TriThuc"
-    # Structural nodes for HAS_CHUNK path (2)
+    # Structural node (1)
     DOCUMENT        = "Document"
-    DOCUMENT_CHUNK  = "DocumentChunk"
 
 
 class RelType(str, Enum):
@@ -48,8 +47,6 @@ class RelType(str, Enum):
     NGUON_GOC           = "NGUON_GOC"
     SAN_XUAT_BOI        = "SAN_XUAT_BOI"
     THUOC_DANH_MUC      = "THUOC_DANH_MUC"
-    # Document-to-chunk (1)
-    HAS_CHUNK           = "HAS_CHUNK"
     # Procurement lifecycle (5)
     CO_DON_HANG         = "CO_DON_HANG"
     YEU_CAU_CHAO_GIA    = "YEU_CAU_CHAO_GIA"

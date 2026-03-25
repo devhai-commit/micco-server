@@ -12,6 +12,20 @@ _ALLOWED_LABELS = {
 
 _DOMAIN_RELS = {rel.value for rel in RelType}
 
+# Allowlist of attribute keys per label (prevents arbitrary property injection)
+_ALLOWED_ATTRS: dict[str, set[str]] = {
+    "NhaCungCap":    {"dia_chi", "ma_so_thue", "dien_thoai"},
+    "HopDong":       {"so_van_ban", "ngay", "gia_tri", "hinh_thuc", "thoi_han"},
+    "VatTu":         {"ma_vat_tu", "quy_cach", "don_vi_tinh", "don_gia", "xuat_xu"},
+    "NguoiKiemTra":  {"chuc_vu", "phong_ban"},
+    "ChungChi":      {"so_van_ban", "ngay", "co_quan_ban_hanh"},
+    "QuyDinh":       {"so_van_ban", "ngay", "co_quan_ban_hanh"},
+    "Kho":           {"dia_chi"},
+    "CongTruong":    {"dia_chi"},
+    "ChaoGia":       {"ngay", "gia_tri", "hieu_luc"},
+    "SuCo":          {"ngay", "gia_tri", "tai_san"},
+}
+
 CATEGORY_LABEL_MAP: dict[str, str] = {
     "VatTu":       "VatTu",
     "Tài liệu":    "VatTu",
@@ -107,15 +121,29 @@ class Neo4jService:
             logger.warning("Invalid source_label=%r for entity graph", source_label)
             return
         with self._driver.session() as session:
-            # 1. MERGE entity nodes
+            # 1. MERGE entity nodes with attributes
             for entity in entities:
                 label = entity.get("label", "")
                 name = entity.get("name", "")
                 if label not in _ALLOWED_LABELS or not name:
                     continue
+                # Filter attributes through allowlist
+                raw_attrs = entity.get("attributes", {})
+                allowed = _ALLOWED_ATTRS.get(label, set())
+                attrs = {
+                    k: str(v) for k, v in raw_attrs.items()
+                    if k in allowed and v
+                }
+                # Build SET clause dynamically
+                set_parts = ["e.last_seen = datetime()"]
+                params: dict = {"name": name}
+                for k, v in attrs.items():
+                    set_parts.append(f"e.{k} = ${k}")
+                    params[k] = v
+                set_clause = ", ".join(set_parts)
                 session.run(
-                    f"MERGE (e:{label} {{name: $name}}) SET e.last_seen = datetime()",
-                    name=name,
+                    f"MERGE (e:{label} {{name: $name}}) SET {set_clause}",
+                    **params,
                 )
 
             # 2. MERGE relationships
@@ -154,80 +182,6 @@ class Neo4jService:
                     doc_id=document_id,
                     name=name,
                 )
-
-    def merge_document_chunk(
-        self,
-        document_id: int,
-        chunk_index: int,
-        content: str,
-        embedding: list[float],
-        department_id: int | None = None,
-    ) -> None:
-        """Create a DocumentChunk node with embedding for semantic search."""
-        if not self.available:
-            return
-        cypher = """
-            MERGE (c:DocumentChunk {
-                document_id: $document_id,
-                chunk_index: $chunk_index
-            })
-            SET c.content = $content,
-                c.embedding = $embedding,
-                c.department_id = $department_id
-            WITH c
-            MATCH (d {document_id: $document_id})
-            MERGE (d)-[:HAS_CHUNK]->(c)
-        """
-        with self._driver.session() as session:
-            session.run(
-                cypher,
-                document_id=document_id,
-                chunk_index=chunk_index,
-                content=content,
-                embedding=embedding,
-                department_id=department_id,
-            )
-
-    def search_similar_chunks(
-        self,
-        query_embedding: list[float],
-        limit: int = 5,
-        department_id: int | None = None,
-    ) -> list[dict]:
-        """Semantic search over DocumentChunk embeddings in Neo4j.
-
-        department_id filters to chunks belonging to that department's documents.
-        None = no filter (Admin).
-        """
-        if not self.available:
-            return []
-
-        dept_filter = ""
-        if department_id is not None:
-            dept_filter = (
-                "AND EXISTS { MATCH (d)-[:HAS_CHUNK]->(c) "
-                "WHERE d.department_id = $department_id }"
-            )
-
-        cypher = f"""
-            MATCH (c:DocumentChunk)
-            WHERE c.embedding IS NOT NULL
-            {dept_filter}
-            RETURN c.document_id AS document_id,
-                   c.chunk_index AS chunk_index,
-                   c.content AS content,
-                   apoc.vectors.similarity(c.embedding, $embedding) AS similarity
-            ORDER BY similarity DESC
-            LIMIT $limit
-        """
-        with self._driver.session() as session:
-            result = session.run(
-                cypher,
-                embedding=query_embedding,
-                limit=limit,
-                department_id=department_id,
-            )
-            return [dict(record) for record in result]
 
     def run_cypher(self, query: str, params: dict | None = None) -> list[dict]:
         if not self.available:

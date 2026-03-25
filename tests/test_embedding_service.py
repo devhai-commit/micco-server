@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 
-def _make_mock_model(dim=1024):
+def _make_mock_model(dim=512):
     model = MagicMock()
     import numpy as np
     model.encode = MagicMock(
@@ -17,7 +17,7 @@ def test_embed_returns_list_of_vectors():
         embedding_service._model = None  # reset singleton
         result = embedding_service.embed(["hello", "world"])
         assert len(result) == 2
-        assert len(result[0]) == 1024
+        assert len(result[0]) == 512
 
 
 def test_embed_empty_input_returns_empty():
@@ -46,7 +46,7 @@ def test_embed_oom_retries_with_batch_1():
         call_count["n"] += 1
         if batch_size > 1:
             raise RuntimeError("CUDA out of memory")
-        return np.random.rand(len(texts), 1024).tolist()
+        return np.random.rand(len(texts), 512).tolist()
 
     mock_model = MagicMock()
     mock_model.encode = fake_encode

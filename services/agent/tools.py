@@ -68,7 +68,7 @@ def make_tools(db: Session, department_id: int | None = None) -> list:
         if department_id is not None:
             # Append department filter for document-linked queries
             dept_filter = (
-                f" AND (EXISTS {{ MATCH (doc)-[:MENTIONS|HAS_CHUNK]-(n) "
+                f" AND (EXISTS {{ MATCH (doc)-[:MENTIONS]-(n) "
                 f"WHERE doc.department_id = {department_id} }}"
                 f" OR n.department_id = {department_id})"
             )
@@ -81,31 +81,6 @@ def make_tools(db: Session, department_id: int | None = None) -> list:
             return json.dumps(rows, ensure_ascii=False, indent=2)
         except Exception as exc:
             raise ToolException(f"Graph query failed: {exc}") from exc
-
-    @tool
-    def search_kg_semantic(query: str, limit: int = 5) -> str:
-        """Semantic search over document chunks using Neo4j vector similarity.
-
-        Results are scoped to the current user's department.
-        """
-        try:
-            vector = embed([query])[0]
-            rows = neo4j_service.search_similar_chunks(vector, limit, department_id=department_id)
-            if not rows:
-                return "No matching chunks found in knowledge graph."
-            lines = []
-            doc_ids = []
-            for i, row in enumerate(rows, 1):
-                doc_ids.append(str(row.get("document_id", "")))
-                lines.append(
-                    f"Chunk {i} (doc_id={row.get('document_id')}, "
-                    f"similarity={row.get('similarity', 0):.3f}):\n{row.get('content', '')}"
-                )
-            doc_id_str = ",".join(dict.fromkeys(doc_ids))
-            return "DOCUMENT_IDS: " + doc_id_str + "\n---\n" + "\n\n".join(lines)
-        except Exception as exc:
-            logger.warning("Neo4j semantic search failed: %s", exc)
-            return ""
 
     @tool
     def search_document_chunks(query: str, limit: int = 5) -> str:
@@ -234,11 +209,14 @@ def make_tools(db: Session, department_id: int | None = None) -> list:
 
             if not rows:
                 vector = embed([keywords])[0]
-                chunk_results = neo4j_service.search_similar_chunks(vector, limit, department_id=department_id)
-                if chunk_results:
-                    lines = [f"Found {len(chunk_results)} relevant document chunks:", ""]
-                    for i, r in enumerate(chunk_results, 1):
-                        lines.append(f"{i}. doc_id={r.get('document_id')}: {r.get('content', '')[:200]}...")
+                pg_rows = db.execute(
+                    text("SELECT * FROM search_chunks_by_embedding(CAST(:embedding AS vector), :dept_id, :limit)"),
+                    {"embedding": str(vector), "dept_id": department_id, "limit": limit},
+                ).fetchall()
+                if pg_rows:
+                    lines = [f"Found {len(pg_rows)} relevant document chunks:", ""]
+                    for i, r in enumerate(pg_rows, 1):
+                        lines.append(f"{i}. {r.source_type}_id={r.source_id}: {r.chunk_content[:200]}...")
                     return "\n".join(lines)
                 return f"Không tìm thấy kết quả nào cho từ khóa: {keywords}"
 
@@ -317,7 +295,7 @@ Hãy phân tích câu hỏi sau và trả lời theo format JSON:
     "loai_thong_tin": "loại thông tin cần tìm (quan hệ, nội dung, thống kê...)",
     "tu_khoa_tim_kiem": "các từ khóa để tìm kiếm trong graph",
     "cau_hoi_chuan_hoa": "câu hỏi được chuẩn hóa",
-    "giai_phap_de_xuat": "nên dùng tool nào (query_knowledge_graph / search_kg_flexible / search_kg_semantic)"
+    "giai_phap_de_xuat": "nên dùng tool nào (query_knowledge_graph / search_kg_flexible / search_document_chunks)"
 }}
 
 CHỈ trả JSON, không giải thích gì thêm."""
@@ -337,4 +315,158 @@ CHỈ trả JSON, không giải thích gì thêm."""
             logger.warning("LLM reasoning failed: %s", exc)
             return f"Phân tích thất bại: {exc}"
 
-    return [query_knowledge_graph, search_kg_semantic, search_kg_flexible, list_kg_schema, llm_reasoning, search_document_chunks, get_document_details]
+    # ── GraphRAG Local Search ────────────────────────────────────
+
+    @tool
+    def search_local(query: str, top_k: int = 5, chunk_limit: int = 5) -> str:
+        """GraphRAG Local Search: find entities by semantic similarity, then
+        traverse the knowledge graph to collect relationships, community context,
+        and source document chunks.
+
+        Best for specific questions about entities, suppliers, contracts, materials.
+        """
+        try:
+            # Step 1: Vector similarity on entity embeddings (PostgreSQL)
+            vector = embed([query])[0]
+            try:
+                entity_rows = db.execute(
+                    text("SELECT * FROM search_entities_by_embedding(CAST(:emb AS vector), :limit)"),
+                    {"emb": str(vector), "limit": top_k},
+                ).fetchall()
+            except Exception as entity_exc:
+                db.rollback()
+                logger.warning("Entity embedding search unavailable, falling back to chunk search: %s", entity_exc)
+                # Fallback: skip entity step, go straight to chunk search
+                entity_rows = []
+
+            entity_names = [r.entity_name for r in entity_rows]
+
+            # Step 2: Graph traversal — get relationships for matched entities
+            graph_context_parts = ["=== MATCHED ENTITIES ==="]
+            for r in entity_rows:
+                graph_context_parts.append(
+                    f"- {r.entity_label}: {r.entity_name} (similarity={r.similarity:.3f})"
+                )
+                if r.description:
+                    graph_context_parts.append(f"  {r.description}")
+
+            # Fetch relationships from Neo4j for matched entities
+            if neo4j_service.available:
+                placeholders = ", ".join(f"'{n}'" for n in entity_names)
+                rel_cypher = f"""
+                MATCH (a)-[r]-(b)
+                WHERE a.name IN [{placeholders}] OR b.name IN [{placeholders}]
+                RETURN a.name AS source, labels(a)[0] AS source_type,
+                       type(r) AS relation,
+                       b.name AS target, labels(b)[0] AS target_type
+                LIMIT 30
+                """
+                rels = neo4j_service.run_cypher(rel_cypher, {})
+                if rels:
+                    graph_context_parts.append("\n=== RELATIONSHIPS ===")
+                    seen = set()
+                    for rel in rels:
+                        key = (rel.get("source"), rel.get("relation"), rel.get("target"))
+                        if key not in seen:
+                            seen.add(key)
+                            graph_context_parts.append(
+                                f"- {rel['source']} ({rel.get('source_type','')}) "
+                                f"--[{rel['relation']}]--> "
+                                f"{rel['target']} ({rel.get('target_type','')})"
+                            )
+
+                # Step 3: Community context — find communities containing matched entities
+                community_rows = db.execute(
+                    text("""
+                        SELECT DISTINCT c.title, c.summary
+                        FROM communities c
+                        JOIN community_entities ce ON c.id = ce.community_id
+                        WHERE ce.entity_name = ANY(:names)
+                        ORDER BY c.rank DESC
+                        LIMIT 3
+                    """),
+                    {"names": entity_names},
+                ).fetchall()
+                if community_rows:
+                    graph_context_parts.append("\n=== COMMUNITY CONTEXT ===")
+                    for cr in community_rows:
+                        graph_context_parts.append(f"- {cr.title}: {cr.summary}")
+
+            # Step 4: Source text chunks from PostgreSQL (via MENTIONS links)
+            chunk_rows = db.execute(
+                text("""
+                    SELECT * FROM search_chunks_by_embedding(
+                        CAST(:emb AS vector), :dept_id, :limit
+                    )
+                """),
+                {"emb": str(vector), "dept_id": department_id, "limit": chunk_limit},
+            ).fetchall()
+
+            doc_ids = []
+            if chunk_rows:
+                graph_context_parts.append("\n=== SOURCE TEXT CHUNKS ===")
+                for i, cr in enumerate(chunk_rows, 1):
+                    if cr.source_type == "document":
+                        doc_ids.append(str(cr.source_id))
+                    graph_context_parts.append(
+                        f"Chunk {i} ({cr.source_type} id={cr.source_id}, "
+                        f"name={cr.source_name}, sim={cr.similarity:.3f}):\n{cr.chunk_content}"
+                    )
+
+            header = "DOCUMENT_IDS: " + ",".join(dict.fromkeys(doc_ids)) if doc_ids else ""
+            return header + "\n" + "\n".join(graph_context_parts)
+
+        except Exception as exc:
+            logger.warning("Local search failed: %s", exc)
+            return f"Local search failed: {exc}"
+
+    # ── GraphRAG Global Search ────────────────────────────────────
+
+    @tool
+    def search_global(query: str, top_k: int = 5) -> str:
+        """GraphRAG Global Search: search over community summaries for broad,
+        thematic questions that span multiple entities or the whole corpus.
+
+        Best for overview questions: trends, comparisons, summaries.
+        """
+        try:
+            vector = embed([query])[0]
+
+            # Vector similarity on community summary embeddings
+            rows = db.execute(
+                text("""
+                    SELECT c.id, c.title, c.summary, c.full_content,
+                           c.entity_count, c.relationship_count,
+                           1 - (c.embedding <=> CAST(:emb AS vector))::FLOAT AS similarity
+                    FROM communities c
+                    WHERE c.embedding IS NOT NULL
+                    ORDER BY c.embedding <=> CAST(:emb AS vector) ASC
+                    LIMIT :limit
+                """),
+                {"emb": str(vector), "limit": top_k},
+            ).fetchall()
+
+            if not rows:
+                return "No community data available. Run community detection first."
+
+            lines = [f"Found {len(rows)} relevant communities:\n"]
+            for i, r in enumerate(rows, 1):
+                lines.append(
+                    f"--- Community {i}: {r.title} "
+                    f"(entities={r.entity_count}, rels={r.relationship_count}, "
+                    f"similarity={r.similarity:.3f}) ---"
+                )
+                lines.append(r.full_content or r.summary or "")
+                lines.append("")
+
+            return "\n".join(lines)
+
+        except Exception as exc:
+            logger.warning("Global search failed: %s", exc)
+            return f"Global search failed: {exc}"
+
+    return [
+        query_knowledge_graph, search_kg_flexible, list_kg_schema,
+        llm_reasoning, search_document_chunks, get_document_details,
+        search_local, search_global,
+    ]

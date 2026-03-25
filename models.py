@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, BigInteger, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, BigInteger, Float, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from database import Base
@@ -62,6 +62,7 @@ class Document(Base):
 
     owner = relationship("User", foreign_keys=[owner_id], back_populates="documents")
     department = relationship("Department", back_populates="documents")
+    versions = relationship("DocumentVersion", back_populates="document", order_by="DocumentVersion.version_number.desc()")
     # chunks: queried via DocumentChunk.source_type='document', source_id=self.id
 
     @property
@@ -75,6 +76,30 @@ class Document(Base):
     @property
     def date(self):
         return self.created_at.strftime("%Y-%m-%d") if self.created_at else ""
+
+
+class DocumentVersion(Base):
+    """Version history for documents — each re-upload creates a new version."""
+    __tablename__ = "document_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    version_label = Column(String(50), nullable=False, default="V 1.0")
+    file_path = Column(String(500), nullable=True)
+    size = Column(String(50), nullable=True)
+    size_bytes = Column(BigInteger, default=0)
+    change_note = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    is_current = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="versions")
+    creator = relationship("User", foreign_keys=[created_by])
+
+    @property
+    def creator_name(self):
+        return self.creator.name if self.creator else "Unknown"
 
 
 class DocumentChunk(Base):

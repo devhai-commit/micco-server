@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
 from database import get_db
-from models import User, Document
-from schemas import DocumentResponse
+from models import User, Document, DocumentVersion
+from schemas import DocumentResponse, DocumentVersionResponse
 from auth import get_current_user
 from config import UPLOAD_DIR, MAX_FILE_SIZE
 
@@ -189,6 +189,21 @@ async def upload_documents(
         db.commit()
         db.refresh(doc)
 
+        # Create initial version V1.0
+        initial_version = DocumentVersion(
+            document_id=doc.id,
+            version_number=1,
+            version_label="V 1.0",
+            file_path=stored_name,
+            size=format_file_size(size_bytes),
+            size_bytes=size_bytes,
+            change_note="Phiên bản gốc",
+            created_by=current_user.id,
+            is_current=True,
+        )
+        db.add(initial_version)
+        db.commit()
+
         # Eagerly load relationships for response
         db.refresh(doc, attribute_names=["owner", "department"])
 
@@ -281,6 +296,183 @@ def get_document(
     check_department_access(current_user, doc)
 
     return build_document_response(doc)
+
+
+# ─── Get Document Versions ──────────────────────────────────
+
+@router.get("/{doc_id}/versions", response_model=list[DocumentVersionResponse])
+def get_document_versions(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all versions of a document."""
+    doc = db.query(Document).options(
+        joinedload(Document.owner),
+        joinedload(Document.department),
+    ).filter(Document.id == doc_id).first()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    check_department_access(current_user, doc)
+
+    versions = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == doc_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .all()
+    )
+
+    return [
+        DocumentVersionResponse(
+            id=v.id,
+            document_id=v.document_id,
+            version_number=v.version_number,
+            version_label=v.version_label,
+            size=v.size,
+            change_note=v.change_note,
+            created_by_name=v.creator_name,
+            is_current=bool(v.is_current),
+            created_at=v.created_at,
+        )
+        for v in versions
+    ]
+
+
+# ─── Upload New Version ─────────────────────────────────────
+
+@router.post("/{doc_id}/versions", response_model=DocumentVersionResponse)
+async def upload_new_version(
+    doc_id: int,
+    file: UploadFile = File(...),
+    change_note: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a new version of a document."""
+    doc = db.query(Document).options(
+        joinedload(Document.owner),
+        joinedload(Document.department),
+    ).filter(Document.id == doc_id).first()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    check_department_access(current_user, doc)
+
+    # Read file content
+    content = await file.read()
+    size_bytes = len(content)
+
+    if size_bytes > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds {MAX_FILE_SIZE // (1024*1024)}MB limit",
+        )
+
+    # Save file to disk
+    file_ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "bin"
+    stored_name = f"{uuid.uuid4().hex}.{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, stored_name)
+
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Get next version number
+    max_version = (
+        db.query(DocumentVersion.version_number)
+        .filter(DocumentVersion.document_id == doc_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .first()
+    )
+    next_version = (max_version[0] + 1) if max_version else 1
+
+    # Generate version label
+    version_label = f"V {next_version}.0"
+
+    # Mark all previous versions as not current
+    db.query(DocumentVersion).filter(
+        DocumentVersion.document_id == doc_id,
+        DocumentVersion.is_current == True,
+    ).update({"is_current": False})
+
+    # Create new version
+    new_version = DocumentVersion(
+        document_id=doc_id,
+        version_number=next_version,
+        version_label=version_label,
+        file_path=stored_name,
+        size=format_file_size(size_bytes),
+        size_bytes=size_bytes,
+        change_note=change_note or f"Phiên bản {version_label}",
+        created_by=current_user.id,
+        is_current=True,
+    )
+    db.add(new_version)
+
+    # Update the main document to point to the latest file
+    doc.file_path = stored_name
+    doc.size = format_file_size(size_bytes)
+    doc.size_bytes = size_bytes
+    doc.name = file.filename  # Update name if the new file has a different name
+
+    db.commit()
+    db.refresh(new_version)
+
+    return DocumentVersionResponse(
+        id=new_version.id,
+        document_id=new_version.document_id,
+        version_number=new_version.version_number,
+        version_label=new_version.version_label,
+        size=new_version.size,
+        change_note=new_version.change_note,
+        created_by_name=new_version.creator_name,
+        is_current=True,
+        created_at=new_version.created_at,
+    )
+
+
+# ─── Download Specific Version ──────────────────────────────
+
+@router.get("/{doc_id}/versions/{version_id}/download")
+def download_version(
+    doc_id: int,
+    version_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download a specific version of a document."""
+    doc = db.query(Document).options(
+        joinedload(Document.owner),
+        joinedload(Document.department),
+    ).filter(Document.id == doc_id).first()
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    check_department_access(current_user, doc)
+
+    version = db.query(DocumentVersion).filter(
+        DocumentVersion.id == version_id,
+        DocumentVersion.document_id == doc_id,
+    ).first()
+
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    if not version.file_path:
+        raise HTTPException(status_code=404, detail="File not available for this version")
+
+    file_path = os.path.join(UPLOAD_DIR, version.file_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        path=file_path,
+        filename=f"{doc.name} ({version.version_label})",
+        media_type="application/octet-stream",
+    )
 
 
 # ─── Delete Document ────────────────────────────────────────

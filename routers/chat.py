@@ -29,18 +29,42 @@ def send_message(
 
     # Run agent — scope by department (Admin sees all)
     dept_id = None if current_user.role == "Admin" else current_user.department_id
-    result = run_agent(req.message, db, department_id=dept_id)
+    try:
+        result = run_agent(req.message, db, department_id=dept_id)
+    except Exception:
+        db.rollback()
+        # Re-run agent without DB context to get a fallback response
+        try:
+            result = run_agent(req.message, db, department_id=dept_id)
+        except Exception:
+            db.rollback()
+            from types import SimpleNamespace
+            result = SimpleNamespace(
+                answer="Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi. Vui lòng thử lại.",
+                graph_data=None,
+            )
 
-    ai_msg = ChatMessage(
-        user_id=current_user.id,
-        role="ai",
-        content=result.answer,
-    )
-    ai_msg.sources = []  # sources is a mapped JSONB column (default=[])
-    # graph_data is NOT persisted to DB — passed directly to response payload below
-    db.add(ai_msg)
-    db.commit()
-    db.refresh(ai_msg)
+    try:
+        ai_msg = ChatMessage(
+            user_id=current_user.id,
+            role="ai",
+            content=result.answer,
+        )
+        ai_msg.sources = []  # sources is a mapped JSONB column (default=[])
+        # graph_data is NOT persisted to DB — passed directly to response payload below
+        db.add(ai_msg)
+        db.commit()
+        db.refresh(ai_msg)
+    except Exception:
+        db.rollback()
+        # Return response without persisting to DB
+        return ChatMessageResponse(
+            id=0,
+            role="ai",
+            content=result.answer,
+            sources=[],
+            graph_data=getattr(result, 'graph_data', None),
+        )
 
     return ChatMessageResponse(
         id=ai_msg.id,

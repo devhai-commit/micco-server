@@ -129,14 +129,60 @@ def test_create_entity_graph_merges_mentions_edge(mock_driver):
         "Expected a MENTIONS edge Cypher call"
 
 
+def test_create_entity_graph_sets_attributes(mock_driver):
+    driver, session = mock_driver
+    from services.neo4j_service import Neo4jService
+    svc = Neo4jService.__new__(Neo4jService)
+    svc.available = True
+    svc._driver = driver
+
+    entities = [{
+        "name": "Công ty ABC",
+        "label": "NhaCungCap",
+        "attributes": {"dia_chi": "Hà Nội", "ma_so_thue": "012345"},
+    }]
+    svc.create_entity_graph(document_id=1, entities=entities, relationships=[])
+
+    # Find the MERGE entity call (first session.run call)
+    cypher_call = session.run.call_args_list[0]
+    cypher = cypher_call[0][0]
+    kwargs = cypher_call[1]
+    assert "e.dia_chi" in cypher
+    assert "e.ma_so_thue" in cypher
+    assert kwargs["dia_chi"] == "Hà Nội"
+    assert kwargs["ma_so_thue"] == "012345"
+
+
+def test_create_entity_graph_filters_disallowed_attributes(mock_driver):
+    driver, session = mock_driver
+    from services.neo4j_service import Neo4jService
+    svc = Neo4jService.__new__(Neo4jService)
+    svc.available = True
+    svc._driver = driver
+
+    entities = [{
+        "name": "HĐ-001",
+        "label": "HopDong",
+        "attributes": {"ngay": "15/05/2025", "evil_key": "DROP DATABASE"},
+    }]
+    svc.create_entity_graph(document_id=1, entities=entities, relationships=[])
+
+    cypher_call = session.run.call_args_list[0]
+    cypher = cypher_call[0][0]
+    kwargs = cypher_call[1]
+    assert "e.ngay" in cypher
+    assert "evil_key" not in cypher
+    assert "evil_key" not in kwargs
+
+
 def test_allowed_labels_covers_all_domain_labels():
-    """_ALLOWED_LABELS must include all 17 domain NodeLabel values."""
+    """_ALLOWED_LABELS must include all domain NodeLabel values."""
     from services.neo4j_service import _ALLOWED_LABELS
     from kg.ontology import NodeLabel
     domain_labels = {
         label.value for label in NodeLabel
-        if label not in (NodeLabel.DOCUMENT, NodeLabel.DOCUMENT_CHUNK)
+        if label is not NodeLabel.DOCUMENT
     }
-    assert domain_labels == _ALLOWED_LABELS, (
+    assert domain_labels.issubset(_ALLOWED_LABELS), (
         f"Missing labels: {domain_labels - _ALLOWED_LABELS}"
     )

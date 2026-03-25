@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 _DOMAIN_LABELS: set[str] = {
     label.value for label in NodeLabel
-    if label not in (NodeLabel.DOCUMENT, NodeLabel.DOCUMENT_CHUNK)
+    if label is not NodeLabel.DOCUMENT
 }
 
 _DOMAIN_RELS: set[str] = {
@@ -24,13 +24,16 @@ _SYSTEM_PROMPT = (
     "- Hóa đơn (invoices)\n\n"
     "VALID ENTITY LABELS: " + ", ".join(sorted(_DOMAIN_LABELS)) + "\n"
     "VALID RELATIONSHIP TYPES: " + ", ".join(sorted(_DOMAIN_RELS)) + "\n\n"
-    "EXTRACT THESE ENTITIES (use exact label from above):\n"
-    "- NhaCungCap: Suppliers, customers, companies (with name, address, tax code)\n"
-    "- HopDong: Contracts, orders with numbers, dates, values\n"
-    "- VatTu: Materials, products, equipment, spare parts\n"
-    "- NguoiKiemTra: People with positions (directors, managers, staff)\n"
-    "- ChungChi: Certificates, business licenses, authorization letters\n"
-    "- Kho: Warehouses, delivery locations, storage facilities\n\n"
+    "EXTRACT THESE ENTITIES (use exact label from above) with attributes:\n"
+    "- NhaCungCap: Suppliers, companies. Attrs: dia_chi, ma_so_thue, dien_thoai\n"
+    "- HopDong: Contracts, orders. Attrs: so_van_ban, ngay, gia_tri, hinh_thuc, thoi_han\n"
+    "- VatTu: Materials, products, spare parts. Attrs: ma_vat_tu, quy_cach, don_vi_tinh, don_gia, xuat_xu\n"
+    "- NguoiKiemTra: People (directors, managers, staff). Attrs: chuc_vu, phong_ban\n"
+    "- ChungChi: Certificates, licenses. Attrs: so_van_ban, ngay, co_quan_ban_hanh\n"
+    "- QuyDinh: Regulations, decisions. Attrs: so_van_ban, ngay, co_quan_ban_hanh\n"
+    "- Kho: Warehouses, delivery locations. Attrs: dia_chi\n"
+    "- ChaoGia: Quotations. Attrs: ngay, gia_tri, hieu_luc\n"
+    "- SuCo: Incidents, repair reports. Attrs: ngay, gia_tri, tai_san\n\n"
     "EXTRACT THESE RELATIONSHIPS (use exact type from above):\n"
     "- CUNG_CAP: Company supplies materials/products to another\n"
     "- CO_DON_HANG: Company has an order/contract\n"
@@ -42,12 +45,15 @@ _SYSTEM_PROMPT = (
     "- DUOC_DUYET_BOI: Document/person approved by another person\n"
     "- NHAP_VAT_TU: Company imports materials\n\n"
     "Return JSON with exact schema:\n"
-    '{"entities": [{"name": "...", "label": "..."}], '
+    '{"entities": [{"name": "...", "label": "...", "attributes": {"key": "value", ...}}], '
     '"relationships": [{"source": "...", "source_label": "...", '
     '"relation": "...", "target": "...", "target_label": "..."}]}\n'
-    "Only use labels and relationship types from the valid lists above. "
-    "Extract ALL entities and relationships clearly mentioned in the text. "
-    "For Vietnamese company names, use the full official name."
+    "Rules:\n"
+    "- Only use labels and relationship types from the valid lists above.\n"
+    "- Extract ALL entities and relationships clearly mentioned in the text.\n"
+    "- For Vietnamese company names, use the full official name.\n"
+    "- Only include attributes that are explicitly stated in the text. Omit unknown attributes.\n"
+    "- Attribute values must be strings. Keep monetary values with units (e.g. '322.272.000 VNĐ')."
 )
 
 _ENTITY_ONLY_PROMPT = (
@@ -56,9 +62,24 @@ _ENTITY_ONLY_PROMPT = (
     "VALID ENTITY LABELS: " + ", ".join(sorted(_DOMAIN_LABELS)) + "\n\n"
     "For each entity, provide:\n"
     "- name: The entity name (full Vietnamese name for companies, specific names for items)\n"
-    "- label: One of the valid labels above\n\n"
-    'Return JSON: {"entities": [{"name": "...", "label": "..."}]}\n'
-    "Only use labels from the valid list. Extract ALL entities mentioned in the text."
+    "- label: One of the valid labels above\n"
+    "- attributes: A dict of key-value pairs with additional info found in the text\n\n"
+    "ALLOWED ATTRIBUTES PER LABEL:\n"
+    "- NhaCungCap: dia_chi, ma_so_thue, dien_thoai\n"
+    "- HopDong: so_van_ban, ngay, gia_tri, hinh_thuc, thoi_han\n"
+    "- VatTu: ma_vat_tu, quy_cach, don_vi_tinh, don_gia, xuat_xu\n"
+    "- NguoiKiemTra: chuc_vu, phong_ban\n"
+    "- ChungChi: so_van_ban, ngay, co_quan_ban_hanh\n"
+    "- QuyDinh: so_van_ban, ngay, co_quan_ban_hanh\n"
+    "- Kho: dia_chi\n"
+    "- ChaoGia: ngay, gia_tri, hieu_luc\n"
+    "- SuCo: ngay, gia_tri, tai_san\n\n"
+    'Return JSON: {"entities": [{"name": "...", "label": "...", "attributes": {"key": "value"}}]}\n'
+    "Rules:\n"
+    "- Only use labels from the valid list.\n"
+    "- Only include attributes explicitly stated in the text. Omit unknown ones.\n"
+    "- All attribute values must be strings.\n"
+    "- Extract ALL entities mentioned in the text."
 )
 
 _RELATIONSHIP_ONLY_PROMPT = (
@@ -120,15 +141,29 @@ def extract_kg(chunks: list[str], doc) -> dict:
                         {"role": "system", "content": _ENTITY_ONLY_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                )
+                )                                                                                               
                 data = json.loads(response.choices[0].message.content)
 
                 batch_count = 0
                 for e in data.get("entities", []):
                     if isinstance(e, dict) and e.get("name") and e.get("label") in _DOMAIN_LABELS:
-                        if not any(x["name"] == e["name"] and x["label"] == e["label"] for x in all_entities):
+                        existing = next(
+                            (x for x in all_entities if x["name"] == e["name"] and x["label"] == e["label"]),
+                            None,
+                        )
+                        if existing is None:
+                            if "attributes" not in e:
+                                e["attributes"] = {}
                             all_entities.append(e)
                             batch_count += 1
+                        else:
+                            # Merge new attributes into existing entity
+                            new_attrs = e.get("attributes", {})
+                            if new_attrs and isinstance(new_attrs, dict):
+                                existing.setdefault("attributes", {})
+                                for k, v in new_attrs.items():
+                                    if v and k not in existing["attributes"]:
+                                        existing["attributes"][k] = v
 
                 logger.info("Phase 1 - Batch %d/%d (%d chunks): +%d entities (total: %d)",
                             batch_num, total_batches, len(batch_chunks), batch_count, len(all_entities))

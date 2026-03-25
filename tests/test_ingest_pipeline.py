@@ -49,9 +49,10 @@ def test_run_sets_processing_then_completed():
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
          patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/test.pdf"), \
-         patch("services.ingest_pipeline.extract_text", return_value=["Page 1"]), \
+         patch("services.ingest_pipeline._extract_pdf_native", return_value=None), \
+         patch("services.ingest_pipeline.extract_text", return_value=(["Page 1"], "/tmp/test.md")), \
          patch("services.ingest_pipeline.chunk_text", return_value=[{"chunk_index": 0, "content": "text", "char_start": 0}]), \
-         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 1024]), \
+         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 512]), \
          patch("services.ingest_pipeline.text", return_value=MagicMock()), \
          patch("services.ingest_pipeline.kg_extractor") as mock_kg:
         mock_neo4j.available = True
@@ -90,9 +91,10 @@ def test_run_ocr_path_for_pdf():
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
          patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/material.pdf"), \
-         patch("services.ingest_pipeline.extract_text", return_value=["page text"]) as mock_ocr, \
+         patch("services.ingest_pipeline._extract_pdf_native", return_value=None), \
+         patch("services.ingest_pipeline.extract_text", return_value=(["page text"], "/tmp/test.md")) as mock_ocr, \
          patch("services.ingest_pipeline.chunk_text", return_value=[{"chunk_index": 0, "content": "c", "char_start": 0}]), \
-         patch("services.ingest_pipeline.embed", return_value=[[0.0] * 1024]), \
+         patch("services.ingest_pipeline.embed", return_value=[[0.0] * 512]), \
          patch("services.ingest_pipeline.text", return_value=MagicMock()), \
          patch("services.ingest_pipeline.kg_extractor") as mock_kg:
         mock_neo4j.available = False
@@ -126,12 +128,14 @@ def test_run_calls_kg_extractor_when_neo4j_available():
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
          patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/test.pdf"), \
-         patch("services.ingest_pipeline.extract_text", return_value=["Page 1"]), \
+         patch("services.ingest_pipeline._extract_pdf_native", return_value=None), \
+         patch("services.ingest_pipeline.extract_text", return_value=(["Page 1"], "/tmp/test.md")), \
          patch("services.ingest_pipeline.chunk_text",
                return_value=[{"chunk_index": 0, "content": "text", "char_start": 0}]), \
-         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 1024]), \
+         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 512]), \
          patch("services.ingest_pipeline.text", return_value=MagicMock()), \
-         patch("services.ingest_pipeline.kg_extractor") as mock_kg:
+         patch("services.ingest_pipeline.kg_extractor") as mock_kg, \
+         patch("services.entity_embedding_service.upsert_entity_embeddings", return_value=1):
         mock_neo4j.available = True
         mock_kg.extract_kg.return_value = kg_result
         db = _make_mock_db(doc)
@@ -152,10 +156,11 @@ def test_run_skips_kg_extractor_when_neo4j_unavailable():
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
          patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/test.pdf"), \
-         patch("services.ingest_pipeline.extract_text", return_value=["Page 1"]), \
+         patch("services.ingest_pipeline._extract_pdf_native", return_value=None), \
+         patch("services.ingest_pipeline.extract_text", return_value=(["Page 1"], "/tmp/test.md")), \
          patch("services.ingest_pipeline.chunk_text",
                return_value=[{"chunk_index": 0, "content": "text", "char_start": 0}]), \
-         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 1024]), \
+         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 512]), \
          patch("services.ingest_pipeline.text", return_value=MagicMock()), \
          patch("services.ingest_pipeline.kg_extractor") as mock_kg:
         mock_neo4j.available = False
@@ -172,10 +177,11 @@ def test_run_completes_even_if_kg_extractor_returns_empty():
     with patch("services.ingest_pipeline.SessionLocal") as mock_session_cls, \
          patch("services.ingest_pipeline.neo4j_service") as mock_neo4j, \
          patch("services.ingest_pipeline._safe_file_path", return_value="/uploads/test.pdf"), \
-         patch("services.ingest_pipeline.extract_text", return_value=["Page 1"]), \
+         patch("services.ingest_pipeline._extract_pdf_native", return_value=None), \
+         patch("services.ingest_pipeline.extract_text", return_value=(["Page 1"], "/tmp/test.md")), \
          patch("services.ingest_pipeline.chunk_text",
                return_value=[{"chunk_index": 0, "content": "text", "char_start": 0}]), \
-         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 1024]), \
+         patch("services.ingest_pipeline.embed", return_value=[[0.1] * 512]), \
          patch("services.ingest_pipeline.text", return_value=MagicMock()), \
          patch("services.ingest_pipeline.kg_extractor") as mock_kg:
         mock_neo4j.available = True

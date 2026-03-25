@@ -3,12 +3,12 @@ from kg.ontology import NodeLabel, RelType
 
 
 def test_node_labels_count():
-    # 17 domain nodes + Document + DocumentChunk (structural nodes for HAS_CHUNK path) = 19
+    # 17 domain nodes + TriThuc + Document = 19
     assert len(list(NodeLabel)) == 19
 
 
 def test_rel_types_count():
-    assert len(list(RelType)) == 38
+    assert len(list(RelType)) == 37
 
 
 def test_node_label_values_are_strings():
@@ -22,7 +22,6 @@ def test_key_node_labels_present():
     assert "VatTu" in labels
     assert "NhaCungCap" in labels
     assert "HopDong" in labels
-    assert "DocumentChunk" in labels
     assert "Document" in labels
 
 
@@ -30,5 +29,4 @@ def test_key_rel_types_present():
     rels = {r.value for r in RelType}
     assert "BAO_GOM" in rels
     assert "CUNG_CAP" in rels
-    assert "HAS_CHUNK" in rels
     assert "TUAN_THU_THEO" in rels

@@ -13,7 +13,5 @@ CREATE CONSTRAINT phieu_nhap_unique IF NOT EXISTS
     FOR (n:PhieuNhapKho) REQUIRE n.document_id IS UNIQUE;
 CREATE CONSTRAINT chung_chi_unique IF NOT EXISTS
     FOR (n:ChungChi) REQUIRE n.document_id IS UNIQUE;
-CREATE CONSTRAINT doc_chunk_unique IF NOT EXISTS
-    FOR (n:DocumentChunk) REQUIRE (n.document_id, n.chunk_index) IS UNIQUE;
 CREATE INDEX doc_node_idx IF NOT EXISTS
     FOR (n:Document) ON (n.document_id);
